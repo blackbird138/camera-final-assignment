@@ -1,0 +1,22 @@
+# OpenBayes RTX 5090 environment for task A.
+# Install with:
+#   python -m pip install -r requirements/openbayes-cu130.txt
+#
+# PyTorch CUDA 13.0 wheels are required for this server's RTX 5090 setup.
+--extra-index-url https://download.pytorch.org/whl/cu130
+
+torch==2.11.0
+torchvision==0.26.0
+torchaudio==2.11.0
+
+# Depth Anything V2 CLI inference dependencies.
+# Use the headless OpenCV build because OpenBayes containers may not include libGL.so.1.
+opencv-python-headless>=4.10,<5
+matplotlib>=3.8,<4
+numpy>=1.26,<3
+pillow>=10,<12
+tqdm>=4.66,<5
+
+# Useful for downloading checkpoints from Hugging Face if wget is unavailable.
+huggingface-hub>=0.23,<1
+

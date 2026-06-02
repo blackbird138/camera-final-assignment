@@ -1,0 +1,25 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+.venv/
+venv/
+env/
+
+tmp/
+
+# External repositories and model weights
+Depth-Anything-V2/
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# Local or server-side datasets and generated outputs
+data/raw/
+data/interim/
+data/processed/
+outputs/
+results/
+
