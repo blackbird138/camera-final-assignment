@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""Run Depth Anything V2 inference and record per-image runtime."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import platform
+import sys
+import time
+from pathlib import Path
+
+
+MODEL_CONFIGS = {
+    "vits": {"encoder": "vits", "features": 64, "out_channels": [48, 96, 192, 384]},
+    "vitb": {"encoder": "vitb", "features": 128, "out_channels": [96, 192, 384, 768]},
+    "vitl": {"encoder": "vitl", "features": 256, "out_channels": [256, 512, 1024, 1024]},
+    "vitg": {"encoder": "vitg", "features": 384, "out_channels": [1536, 1536, 1536, 1536]},
+}
+
+DEFAULT_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", required=True, type=Path, help="Path to the Depth-Anything-V2 repo.")
+    parser.add_argument("--img-path", required=True, type=Path, help="Image file or directory.")
+    parser.add_argument("--outdir", required=True, type=Path, help="Directory for depth outputs and runtime CSV.")
+    parser.add_argument("--encoder", default="vitl", choices=sorted(MODEL_CONFIGS), help="Model encoder.")
+    parser.add_argument("--checkpoint", type=Path, help="Checkpoint path. Defaults to repo/checkpoints/depth_anything_v2_{encoder}.pth.")
+    parser.add_argument("--input-size", default=518, type=int, help="Depth Anything V2 input size.")
+    parser.add_argument("--warmup", default=1, type=int, help="Warmup runs on the first image before timing.")
+    parser.add_argument("--grayscale", action="store_true", help="Save grayscale depth instead of inferno colormap.")
+    parser.add_argument("--pred-only", action="store_true", help="Save only prediction instead of original + prediction comparison.")
+    parser.add_argument("--save-npy", action="store_true", help="Also save raw depth arrays as .npy files.")
+    parser.add_argument("--recursive", action="store_true", help="Search image directories recursively.")
+    return parser.parse_args()
+
+
+def find_images(img_path: Path, recursive: bool) -> list[Path]:
+    if img_path.is_file():
+        return [img_path]
+
+    if not img_path.is_dir():
+        raise FileNotFoundError(f"Image path does not exist: {img_path}")
+
+    pattern = "**/*" if recursive else "*"
+    images = [
+        path
+        for path in img_path.glob(pattern)
+        if path.is_file() and path.suffix.lower() in DEFAULT_EXTENSIONS
+    ]
+    return sorted(images)
+
+
+def sync_if_needed(torch_module, device: str) -> None:
+    if device == "cuda":
+        torch_module.cuda.synchronize()
+
+
+def normalize_depth(depth, np_module):
+    depth_min = float(depth.min())
+    depth_max = float(depth.max())
+    denom = depth_max - depth_min
+    if denom < 1e-8:
+        return np_module.zeros_like(depth, dtype=np_module.uint8), depth_min, depth_max
+    depth_uint8 = ((depth - depth_min) / denom * 255.0).astype(np_module.uint8)
+    return depth_uint8, depth_min, depth_max
+
+
+def relative_output_path(image: Path, root: Path, outdir: Path) -> Path:
+    if root.is_dir():
+        try:
+            rel = image.relative_to(root)
+        except ValueError:
+            rel = Path(image.name)
+    else:
+        rel = Path(image.name)
+    return outdir / rel.with_suffix(".png")
+
+
+def main() -> int:
+    args = parse_args()
+    repo = args.repo.resolve()
+    img_path = args.img_path.resolve()
+    outdir = args.outdir.resolve()
+    checkpoint = args.checkpoint.resolve() if args.checkpoint else repo / "checkpoints" / f"depth_anything_v2_{args.encoder}.pth"
+
+    if not repo.exists():
+        raise FileNotFoundError(f"Depth-Anything-V2 repo not found: {repo}")
+    if not checkpoint.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
+
+    sys.path.insert(0, str(repo))
+
+    import cv2
+    import numpy as np
+    import torch
+    from depth_anything_v2.dpt import DepthAnythingV2
+
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+
+    images = find_images(img_path, args.recursive)
+    if not images:
+        raise RuntimeError(f"No images found under: {img_path}")
+
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    model = DepthAnythingV2(**MODEL_CONFIGS[args.encoder])
+    state_dict = torch.load(str(checkpoint), map_location="cpu")
+    model.load_state_dict(state_dict)
+    model = model.to(device).eval()
+
+    first_img = cv2.imread(str(images[0]))
+    if first_img is None:
+        raise RuntimeError(f"Failed to read first image: {images[0]}")
+
+    with torch.no_grad():
+        for _ in range(max(args.warmup, 0)):
+            _ = model.infer_image(first_img, args.input_size)
+            sync_if_needed(torch, device)
+
+    rows = []
+    start_all = time.perf_counter()
+
+    with torch.no_grad():
+        for index, image in enumerate(images, start=1):
+            raw_img = cv2.imread(str(image))
+            if raw_img is None:
+                print(f"[WARN] Skipping unreadable image: {image}", file=sys.stderr)
+                continue
+
+            sync_if_needed(torch, device)
+            start = time.perf_counter()
+            depth = model.infer_image(raw_img, args.input_size)
+            sync_if_needed(torch, device)
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+
+            depth_uint8, depth_min, depth_max = normalize_depth(depth, np)
+            if args.grayscale:
+                depth_vis = depth_uint8
+            else:
+                depth_vis = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_INFERNO)
+
+            output_png = relative_output_path(image, img_path, outdir)
+            output_png.parent.mkdir(parents=True, exist_ok=True)
+
+            if args.pred_only:
+                saved = depth_vis
+            else:
+                if depth_vis.ndim == 2:
+                    depth_for_stack = cv2.cvtColor(depth_vis, cv2.COLOR_GRAY2BGR)
+                else:
+                    depth_for_stack = depth_vis
+                if depth_for_stack.shape[:2] != raw_img.shape[:2]:
+                    depth_for_stack = cv2.resize(depth_for_stack, (raw_img.shape[1], raw_img.shape[0]))
+                split = np.ones((raw_img.shape[0], 50, 3), dtype=np.uint8) * 255
+                saved = cv2.hconcat([raw_img, split, depth_for_stack])
+
+            cv2.imwrite(str(output_png), saved)
+
+            output_npy = ""
+            if args.save_npy:
+                output_npy_path = output_png.with_suffix(".npy")
+                np.save(str(output_npy_path), depth)
+                output_npy = str(output_npy_path)
+
+            height, width = raw_img.shape[:2]
+            row = {
+                "index": index,
+                "image": str(image),
+                "width": width,
+                "height": height,
+                "encoder": args.encoder,
+                "input_size": args.input_size,
+                "device": device,
+                "checkpoint": str(checkpoint),
+                "elapsed_ms": f"{elapsed_ms:.3f}",
+                "depth_min": f"{depth_min:.6f}",
+                "depth_max": f"{depth_max:.6f}",
+                "output_png": str(output_png),
+                "output_npy": output_npy,
+            }
+            rows.append(row)
+            print(f"[{index}/{len(images)}] {image.name}: {elapsed_ms:.2f} ms")
+
+    total_ms = (time.perf_counter() - start_all) * 1000.0
+    csv_path = outdir / "runtime.csv"
+    fieldnames = [
+        "index",
+        "image",
+        "width",
+        "height",
+        "encoder",
+        "input_size",
+        "device",
+        "checkpoint",
+        "elapsed_ms",
+        "depth_min",
+        "depth_max",
+        "output_png",
+        "output_npy",
+    ]
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    elapsed_values = [float(row["elapsed_ms"]) for row in rows]
+    summary = {
+        "image_count": len(rows),
+        "encoder": args.encoder,
+        "input_size": args.input_size,
+        "device": device,
+        "checkpoint": str(checkpoint),
+        "warmup": args.warmup,
+        "total_ms": round(total_ms, 3),
+        "mean_ms": round(sum(elapsed_values) / len(elapsed_values), 3) if elapsed_values else None,
+        "min_ms": round(min(elapsed_values), 3) if elapsed_values else None,
+        "max_ms": round(max(elapsed_values), 3) if elapsed_values else None,
+        "python": sys.version,
+        "platform": platform.platform(),
+        "torch_version": torch.__version__,
+        "cuda_available": bool(torch.cuda.is_available()),
+        "cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "cuda_capability": torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None,
+        "cuda_arch_list": torch.cuda.get_arch_list() if torch.cuda.is_available() else [],
+    }
+    summary_path = outdir / "summary.json"
+    with summary_path.open("w", encoding="utf-8") as handle:
+        json.dump(summary, handle, ensure_ascii=False, indent=2)
+
+    print(f"Runtime CSV: {csv_path}")
+    print(f"Summary JSON: {summary_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
