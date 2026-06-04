@@ -10,6 +10,7 @@ tmp/
 
 # External repositories and model weights
 Depth-Anything-V2/
+Depth-Anything-3/
 checkpoints/
 *.pth
 *.pt
@@ -22,4 +23,3 @@ data/interim/
 data/processed/
 outputs/
 results/
-
