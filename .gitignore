@@ -18,8 +18,5 @@ checkpoints/
 *.safetensors
 
 # Local or server-side datasets and generated outputs
-data/raw/
-data/interim/
-data/processed/
 outputs/
 results/
