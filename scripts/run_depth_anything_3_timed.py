@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 
-DEFAULT_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff")
+DEFAULT_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff", ".thumb")
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,6 +24,7 @@ def parse_args() -> argparse.Namespace:
         help="Hugging Face repo id or local model directory.",
     )
     parser.add_argument("--img-path", required=True, type=Path, help="Image file or directory.")
+    parser.add_argument("--image-list", type=Path, help="Optional text file with one image path per line.")
     parser.add_argument("--outdir", required=True, type=Path, help="Directory for depth outputs and runtime CSV.")
     parser.add_argument("--process-res", default=2048, type=int, help="DA3 processing resolution.")
     parser.add_argument(
@@ -35,11 +36,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", default=1, type=int, help="Warmup runs on the first image before timing.")
     parser.add_argument("--recursive", action="store_true", help="Search image directories recursively.")
     parser.add_argument("--save-npy", action="store_true", help="Save raw depth arrays as .npy files.")
-    parser.add_argument("--invert-vis", action="store_true", help="Invert depth visualization colors.")
+    parser.add_argument(
+        "--vis-larger-is",
+        default="farther",
+        choices=("closer", "farther"),
+        help="Meaning of larger raw depth values for PNG visualization. DA3 defaults to farther.",
+    )
+    parser.add_argument(
+        "--invert-vis",
+        action="store_true",
+        help="Invert final PNG visualization after applying --vis-larger-is.",
+    )
     return parser.parse_args()
 
 
-def find_images(img_path: Path, recursive: bool) -> list[Path]:
+def find_images(img_path: Path, recursive: bool, image_list: Path | None = None) -> list[Path]:
+    if image_list is not None:
+        root = img_path if img_path.is_dir() else img_path.parent
+        images = []
+        with image_list.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                item = line.strip()
+                if not item or item.startswith("#"):
+                    continue
+                path = Path(item)
+                if not path.is_absolute():
+                    path = root / path
+                if not path.exists():
+                    raise FileNotFoundError(f"Image from list does not exist: {path}")
+                images.append(path)
+        return images
+
     if img_path.is_file():
         return [img_path]
     if not img_path.is_dir():
@@ -64,7 +91,7 @@ def relative_output_path(image: Path, root: Path, outdir: Path) -> Path:
     return outdir / rel.with_suffix(".png")
 
 
-def normalize_depth(depth, np_module, invert: bool):
+def normalize_depth_for_vis(depth, np_module, larger_is: str, invert: bool):
     depth_min = float(depth.min())
     depth_max = float(depth.max())
     denom = depth_max - depth_min
@@ -72,6 +99,8 @@ def normalize_depth(depth, np_module, invert: bool):
         depth_uint8 = np_module.zeros_like(depth, dtype=np_module.uint8)
     else:
         normalized = (depth - depth_min) / denom
+        if larger_is == "farther":
+            normalized = 1.0 - normalized
         if invert:
             normalized = 1.0 - normalized
         depth_uint8 = (normalized * 255.0).astype(np_module.uint8)
@@ -105,7 +134,7 @@ def main() -> int:
     else:
         device = "cpu"
 
-    images = find_images(img_path, args.recursive)
+    images = find_images(img_path, args.recursive, args.image_list)
     if not images:
         raise RuntimeError(f"No images found under: {img_path}")
     outdir.mkdir(parents=True, exist_ok=True)
@@ -137,7 +166,12 @@ def main() -> int:
         depth = prediction.depth[0]
         if hasattr(depth, "detach"):
             depth = depth.detach().cpu().numpy()
-        depth_uint8, depth_min, depth_max = normalize_depth(depth, np, args.invert_vis)
+        depth_uint8, depth_min, depth_max = normalize_depth_for_vis(
+            depth,
+            np,
+            args.vis_larger_is,
+            args.invert_vis,
+        )
         depth_vis = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_INFERNO)
 
         output_png = relative_output_path(image, img_path, outdir)
@@ -163,6 +197,8 @@ def main() -> int:
             "elapsed_ms": f"{elapsed_ms:.3f}",
             "depth_min": f"{depth_min:.6f}",
             "depth_max": f"{depth_max:.6f}",
+            "vis_larger_is": args.vis_larger_is,
+            "invert_vis": str(bool(args.invert_vis)),
             "output_png": str(output_png),
             "output_npy": output_npy,
         }
@@ -183,6 +219,8 @@ def main() -> int:
         "elapsed_ms",
         "depth_min",
         "depth_max",
+        "vis_larger_is",
+        "invert_vis",
         "output_png",
         "output_npy",
     ]
@@ -199,6 +237,9 @@ def main() -> int:
         "process_res_method": args.process_res_method,
         "device": device,
         "warmup": args.warmup,
+        "vis_larger_is": args.vis_larger_is,
+        "invert_vis": bool(args.invert_vis),
+        "visualization": "near_bright_far_dark" if not args.invert_vis else "near_dark_far_bright",
         "total_ms": round(total_ms, 3),
         "mean_ms": round(sum(elapsed_values) / len(elapsed_values), 3) if elapsed_values else None,
         "min_ms": round(min(elapsed_values), 3) if elapsed_values else None,

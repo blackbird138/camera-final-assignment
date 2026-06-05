@@ -20,13 +20,14 @@ MODEL_CONFIGS = {
     "vitg": {"encoder": "vitg", "features": 384, "out_channels": [1536, 1536, 1536, 1536]},
 }
 
-DEFAULT_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff")
+DEFAULT_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff", ".thumb")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path, help="Path to the Depth-Anything-V2 repo.")
     parser.add_argument("--img-path", required=True, type=Path, help="Image file or directory.")
+    parser.add_argument("--image-list", type=Path, help="Optional text file with one image path per line.")
     parser.add_argument("--outdir", required=True, type=Path, help="Directory for depth outputs and runtime CSV.")
     parser.add_argument("--encoder", default="vitl", choices=sorted(MODEL_CONFIGS), help="Model encoder.")
     parser.add_argument("--checkpoint", type=Path, help="Checkpoint path. Defaults to repo/checkpoints/depth_anything_v2_{encoder}.pth.")
@@ -36,10 +37,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pred-only", action="store_true", help="Save only prediction instead of original + prediction comparison.")
     parser.add_argument("--save-npy", action="store_true", help="Also save raw depth arrays as .npy files.")
     parser.add_argument("--recursive", action="store_true", help="Search image directories recursively.")
+    parser.add_argument(
+        "--vis-larger-is",
+        default="closer",
+        choices=("closer", "farther"),
+        help="Meaning of larger raw depth values for PNG visualization. DA2 defaults to closer.",
+    )
+    parser.add_argument(
+        "--invert-vis",
+        action="store_true",
+        help="Invert final PNG visualization after applying --vis-larger-is.",
+    )
     return parser.parse_args()
 
 
-def find_images(img_path: Path, recursive: bool) -> list[Path]:
+def find_images(img_path: Path, recursive: bool, image_list: Path | None = None) -> list[Path]:
+    if image_list is not None:
+        root = img_path if img_path.is_dir() else img_path.parent
+        images = []
+        with image_list.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                item = line.strip()
+                if not item or item.startswith("#"):
+                    continue
+                path = Path(item)
+                if not path.is_absolute():
+                    path = root / path
+                if not path.exists():
+                    raise FileNotFoundError(f"Image from list does not exist: {path}")
+                images.append(path)
+        return images
+
     if img_path.is_file():
         return [img_path]
 
@@ -60,13 +88,18 @@ def sync_if_needed(torch_module, device: str) -> None:
         torch_module.cuda.synchronize()
 
 
-def normalize_depth(depth, np_module):
+def normalize_depth_for_vis(depth, np_module, larger_is: str, invert: bool):
     depth_min = float(depth.min())
     depth_max = float(depth.max())
     denom = depth_max - depth_min
     if denom < 1e-8:
         return np_module.zeros_like(depth, dtype=np_module.uint8), depth_min, depth_max
-    depth_uint8 = ((depth - depth_min) / denom * 255.0).astype(np_module.uint8)
+    normalized = (depth - depth_min) / denom
+    if larger_is == "farther":
+        normalized = 1.0 - normalized
+    if invert:
+        normalized = 1.0 - normalized
+    depth_uint8 = (normalized * 255.0).astype(np_module.uint8)
     return depth_uint8, depth_min, depth_max
 
 
@@ -118,7 +151,7 @@ def main() -> int:
     else:
         device = "cpu"
 
-    images = find_images(img_path, args.recursive)
+    images = find_images(img_path, args.recursive, args.image_list)
     if not images:
         raise RuntimeError(f"No images found under: {img_path}")
 
@@ -149,7 +182,12 @@ def main() -> int:
             sync_if_needed(torch, device)
             elapsed_ms = (time.perf_counter() - start) * 1000.0
 
-            depth_uint8, depth_min, depth_max = normalize_depth(depth, np)
+            depth_uint8, depth_min, depth_max = normalize_depth_for_vis(
+                depth,
+                np,
+                args.vis_larger_is,
+                args.invert_vis,
+            )
             if args.grayscale:
                 depth_vis = depth_uint8
             else:
@@ -191,6 +229,8 @@ def main() -> int:
                 "elapsed_ms": f"{elapsed_ms:.3f}",
                 "depth_min": f"{depth_min:.6f}",
                 "depth_max": f"{depth_max:.6f}",
+                "vis_larger_is": args.vis_larger_is,
+                "invert_vis": str(bool(args.invert_vis)),
                 "output_png": str(output_png),
                 "output_npy": output_npy,
             }
@@ -211,6 +251,8 @@ def main() -> int:
         "elapsed_ms",
         "depth_min",
         "depth_max",
+        "vis_larger_is",
+        "invert_vis",
         "output_png",
         "output_npy",
     ]
@@ -227,6 +269,9 @@ def main() -> int:
         "device": device,
         "checkpoint": str(checkpoint),
         "warmup": args.warmup,
+        "vis_larger_is": args.vis_larger_is,
+        "invert_vis": bool(args.invert_vis),
+        "visualization": "near_bright_far_dark" if not args.invert_vis else "near_dark_far_bright",
         "total_ms": round(total_ms, 3),
         "mean_ms": round(sum(elapsed_values) / len(elapsed_values), 3) if elapsed_values else None,
         "min_ms": round(min(elapsed_values), 3) if elapsed_values else None,

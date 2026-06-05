@@ -213,6 +213,7 @@ def score_rows(rows: list[dict], direction: str) -> dict[str, float | int]:
         "correct": correct,
         "ties": ties,
         "accuracy": accuracy,
+        "whdr": 1.0 - accuracy,
         "non_tie_accuracy": non_tie_accuracy,
         "mean_relative_margin": mean_margin,
     }
@@ -377,6 +378,7 @@ def main() -> int:
             "correct": selected_score["correct"],
             "ties": selected_score["ties"],
             "accuracy": f"{selected_score['accuracy']:.4f}",
+            "whdr": f"{selected_score['whdr']:.4f}",
             "non_tie_accuracy": f"{selected_score['non_tie_accuracy']:.4f}",
             "mean_relative_margin": f"{selected_score['mean_relative_margin']:.6f}",
             **runtime_summary,
@@ -417,6 +419,7 @@ def main() -> int:
         "correct",
         "ties",
         "accuracy",
+        "whdr",
         "non_tie_accuracy",
         "mean_relative_margin",
         "runtime_image_count",
@@ -459,4 +462,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
