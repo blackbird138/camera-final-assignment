@@ -81,6 +81,17 @@ def relative_output_path(image: Path, root: Path, outdir: Path) -> Path:
     return outdir / rel.with_suffix(".png")
 
 
+def read_image_bgr(path: Path):
+    import cv2
+    import numpy as np
+    from PIL import Image, ImageOps
+
+    with Image.open(path) as image:
+        image = ImageOps.exif_transpose(image).convert("RGB")
+        rgb = np.asarray(image)
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+
 def main() -> int:
     args = parse_args()
     repo = args.repo.resolve()
@@ -118,9 +129,7 @@ def main() -> int:
     model.load_state_dict(state_dict)
     model = model.to(device).eval()
 
-    first_img = cv2.imread(str(images[0]))
-    if first_img is None:
-        raise RuntimeError(f"Failed to read first image: {images[0]}")
+    first_img = read_image_bgr(images[0])
 
     with torch.no_grad():
         for _ in range(max(args.warmup, 0)):
@@ -132,10 +141,7 @@ def main() -> int:
 
     with torch.no_grad():
         for index, image in enumerate(images, start=1):
-            raw_img = cv2.imread(str(image))
-            if raw_img is None:
-                print(f"[WARN] Skipping unreadable image: {image}", file=sys.stderr)
-                continue
+            raw_img = read_image_bgr(image)
 
             sync_if_needed(torch, device)
             start = time.perf_counter()

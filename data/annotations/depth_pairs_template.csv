@@ -1,0 +1,5 @@
+image,pair_id,ax,ay,bx,by,closer,notes
+examples/example_001.jpg,1,120,300,520,300,A,A点比B点近
+examples/example_001.jpg,2,240,420,240,120,A,前景物体比背景近
+examples/example_002.jpg,1,300,260,740,260,B,B点比A点近
+

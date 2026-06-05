@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Depth Pair Annotator</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f7f8;
+      color: #1f2933;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+    }
+
+    aside {
+      background: #ffffff;
+      border-right: 1px solid #d8dee4;
+      padding: 16px;
+      overflow: auto;
+    }
+
+    main {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px;
+      background: #ffffff;
+      border-bottom: 1px solid #d8dee4;
+    }
+
+    button,
+    input[type="file"],
+    input[type="text"] {
+      font: inherit;
+    }
+
+    button {
+      border: 1px solid #c7d0d9;
+      background: #ffffff;
+      border-radius: 6px;
+      padding: 7px 10px;
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: #0969da;
+      border-color: #0969da;
+      color: #ffffff;
+    }
+
+    button.danger {
+      color: #b42318;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+
+    input[type="text"] {
+      width: 100%;
+      border: 1px solid #c7d0d9;
+      border-radius: 6px;
+      padding: 7px 9px;
+    }
+
+    h1 {
+      font-size: 18px;
+      margin: 0 0 12px;
+    }
+
+    h2 {
+      font-size: 14px;
+      margin: 20px 0 8px;
+    }
+
+    .hint {
+      color: #59636e;
+      font-size: 13px;
+      line-height: 1.45;
+      margin: 8px 0;
+    }
+
+    .stage {
+      min-height: 0;
+      overflow: auto;
+      padding: 16px;
+      display: grid;
+      place-items: start center;
+      background:
+        linear-gradient(45deg, #edf0f3 25%, transparent 25%),
+        linear-gradient(-45deg, #edf0f3 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #edf0f3 75%),
+        linear-gradient(-45deg, transparent 75%, #edf0f3 75%);
+      background-size: 20px 20px;
+      background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+    }
+
+    .image-wrap {
+      position: relative;
+      max-width: 100%;
+      background: #111827;
+      box-shadow: 0 8px 24px rgb(15 23 42 / 18%);
+    }
+
+    img {
+      display: block;
+      max-width: min(100%, 1400px);
+      max-height: calc(100vh - 180px);
+      width: auto;
+      height: auto;
+      user-select: none;
+    }
+
+    .marker {
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      transform: translate(-50%, -50%);
+      border: 2px solid #ffffff;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 700;
+      color: #ffffff;
+      text-shadow: 0 1px 2px rgb(0 0 0 / 60%);
+      pointer-events: none;
+    }
+
+    .marker.a {
+      background: #d92d20;
+    }
+
+    .marker.b {
+      background: #1570ef;
+    }
+
+    .footer {
+      padding: 10px 16px;
+      border-top: 1px solid #d8dee4;
+      background: #ffffff;
+      color: #59636e;
+      font-size: 13px;
+    }
+
+    .status {
+      font-weight: 600;
+      color: #1f2933;
+    }
+
+    .image-list,
+    .pair-list {
+      display: grid;
+      gap: 6px;
+    }
+
+    .image-item,
+    .pair-item {
+      padding: 8px;
+      border: 1px solid #d8dee4;
+      border-radius: 6px;
+      background: #ffffff;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    .image-item.active {
+      border-color: #0969da;
+      background: #eef6ff;
+    }
+
+    .pair-item {
+      background: #f8fafc;
+    }
+
+    .counts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 12px 0;
+    }
+
+    .count {
+      border: 1px solid #d8dee4;
+      border-radius: 6px;
+      padding: 10px;
+      background: #f8fafc;
+    }
+
+    .count strong {
+      display: block;
+      font-size: 20px;
+    }
+
+    @media (max-width: 800px) {
+      body {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        border-right: 0;
+        border-bottom: 1px solid #d8dee4;
+        max-height: 45vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <aside>
+    <h1>Depth Pair Annotator</h1>
+    <input id="fileInput" type="file" accept="image/*" webkitdirectory multiple>
+    <p class="hint">选择 `data/raw/examples` 或 `data/raw/phone_images` 目录。点击图像两次得到 A/B 点，按 A 或 B 记录哪个点更近。</p>
+
+    <h2>图片路径前缀</h2>
+    <input id="pathPrefix" type="text" placeholder="例如 examples/ 或 phone_images/">
+    <p class="hint">如果导出的 image 路径和评价脚本不匹配，可在这里填统一前缀。</p>
+
+    <div class="counts">
+      <div class="count"><strong id="imageCount">0</strong>图片</div>
+      <div class="count"><strong id="pairCount">0</strong>点对</div>
+    </div>
+
+    <h2>图片</h2>
+    <div id="imageList" class="image-list"></div>
+
+    <h2>当前图点对</h2>
+    <div id="pairList" class="pair-list"></div>
+  </aside>
+
+  <main>
+    <div class="toolbar">
+      <button id="prevBtn">上一张</button>
+      <button id="nextBtn">下一张</button>
+      <button id="aCloserBtn" class="primary">A 更近</button>
+      <button id="bCloserBtn" class="primary">B 更近</button>
+      <button id="clearBtn">清当前点</button>
+      <button id="undoBtn" class="danger">撤销上一条</button>
+      <button id="downloadBtn">下载 CSV</button>
+    </div>
+
+    <section class="stage">
+      <div id="imageWrap" class="image-wrap">
+        <img id="image" alt="">
+      </div>
+    </section>
+
+    <div class="footer">
+      <span class="status" id="status">选择图片目录开始。</span>
+      快捷键：A/B 记录远近，N 下一张，P 上一张，U 撤销，Esc 清点。
+    </div>
+  </main>
+
+  <script>
+    const fileInput = document.getElementById("fileInput");
+    const pathPrefix = document.getElementById("pathPrefix");
+    const imageList = document.getElementById("imageList");
+    const pairList = document.getElementById("pairList");
+    const imageCount = document.getElementById("imageCount");
+    const pairCount = document.getElementById("pairCount");
+    const image = document.getElementById("image");
+    const imageWrap = document.getElementById("imageWrap");
+    const status = document.getElementById("status");
+
+    const prevBtn = document.getElementById("prevBtn");
+    const nextBtn = document.getElementById("nextBtn");
+    const aCloserBtn = document.getElementById("aCloserBtn");
+    const bCloserBtn = document.getElementById("bCloserBtn");
+    const clearBtn = document.getElementById("clearBtn");
+    const undoBtn = document.getElementById("undoBtn");
+    const downloadBtn = document.getElementById("downloadBtn");
+
+    let images = [];
+    let currentIndex = 0;
+    let currentPoints = [];
+    let pairs = [];
+
+    function cleanPath(path) {
+      return path.replace(/^\.?\//, "");
+    }
+
+    function exportedImagePath(item) {
+      const prefix = pathPrefix.value.trim();
+      const name = cleanPath(item.relativePath || item.file.name);
+      if (!prefix) return name;
+      return cleanPath(prefix.replace(/\/?$/, "/") + item.file.name);
+    }
+
+    function setStatus(text) {
+      status.textContent = text;
+    }
+
+    function renderMarkers() {
+      imageWrap.querySelectorAll(".marker").forEach(marker => marker.remove());
+      for (const point of currentPoints) {
+        const marker = document.createElement("div");
+        marker.className = `marker ${point.label.toLowerCase()}`;
+        marker.textContent = point.label;
+        marker.style.left = `${point.displayX}px`;
+        marker.style.top = `${point.displayY}px`;
+        imageWrap.appendChild(marker);
+      }
+    }
+
+    function renderImage() {
+      if (!images.length) {
+        image.removeAttribute("src");
+        setStatus("选择图片目录开始。");
+        return;
+      }
+      const item = images[currentIndex];
+      image.src = item.url;
+      image.alt = item.relativePath;
+      currentPoints = [];
+      setStatus(`${currentIndex + 1}/${images.length}: ${item.relativePath}`);
+      renderAll();
+    }
+
+    function renderImageList() {
+      imageList.innerHTML = "";
+      images.forEach((item, index) => {
+        const div = document.createElement("button");
+        div.className = `image-item${index === currentIndex ? " active" : ""}`;
+        div.textContent = `${index + 1}. ${item.relativePath}`;
+        div.onclick = () => {
+          currentIndex = index;
+          renderImage();
+        };
+        imageList.appendChild(div);
+      });
+      imageCount.textContent = images.length;
+    }
+
+    function renderPairList() {
+      pairList.innerHTML = "";
+      const current = images[currentIndex];
+      const currentPath = current ? exportedImagePath(current) : "";
+      pairs
+        .filter(pair => pair.image === currentPath)
+        .forEach(pair => {
+          const div = document.createElement("div");
+          div.className = "pair-item";
+          div.textContent = `#${pair.pair_id}: A(${pair.ax},${pair.ay}) B(${pair.bx},${pair.by}) closer=${pair.closer}`;
+          pairList.appendChild(div);
+        });
+      pairCount.textContent = pairs.length;
+    }
+
+    function renderAll() {
+      renderImageList();
+      renderPairList();
+      renderMarkers();
+      aCloserBtn.disabled = currentPoints.length !== 2;
+      bCloserBtn.disabled = currentPoints.length !== 2;
+      clearBtn.disabled = currentPoints.length === 0;
+      undoBtn.disabled = pairs.length === 0;
+      prevBtn.disabled = currentIndex <= 0;
+      nextBtn.disabled = currentIndex >= images.length - 1;
+      downloadBtn.disabled = pairs.length === 0;
+    }
+
+    function addPair(closer) {
+      if (!images.length || currentPoints.length !== 2) return;
+      const item = images[currentIndex];
+      const imagePath = exportedImagePath(item);
+      const pairId = pairs.filter(pair => pair.image === imagePath).length + 1;
+      const [a, b] = currentPoints;
+      pairs.push({
+        image: imagePath,
+        pair_id: pairId,
+        ax: a.naturalX,
+        ay: a.naturalY,
+        bx: b.naturalX,
+        by: b.naturalY,
+        closer,
+        notes: closer === "A" ? "A点比B点近" : "B点比A点近",
+      });
+      currentPoints = [];
+      setStatus(`已记录 ${imagePath} 的第 ${pairId} 个点对。`);
+      renderAll();
+    }
+
+    function clearCurrentPoints() {
+      currentPoints = [];
+      renderAll();
+    }
+
+    function undoLast() {
+      pairs.pop();
+      renderAll();
+    }
+
+    function go(delta) {
+      if (!images.length) return;
+      currentIndex = Math.min(Math.max(currentIndex + delta, 0), images.length - 1);
+      renderImage();
+    }
+
+    image.addEventListener("click", event => {
+      if (!images.length || currentPoints.length >= 2) return;
+      const rect = image.getBoundingClientRect();
+      const displayX = event.clientX - rect.left;
+      const displayY = event.clientY - rect.top;
+      const naturalX = Math.round(displayX * image.naturalWidth / rect.width);
+      const naturalY = Math.round(displayY * image.naturalHeight / rect.height);
+      currentPoints.push({
+        label: currentPoints.length === 0 ? "A" : "B",
+        displayX,
+        displayY,
+        naturalX,
+        naturalY,
+      });
+      renderAll();
+    });
+
+    image.addEventListener("load", renderMarkers);
+    window.addEventListener("resize", () => {
+      currentPoints = [];
+      renderAll();
+    });
+
+    fileInput.addEventListener("change", () => {
+      for (const item of images) URL.revokeObjectURL(item.url);
+      images = Array.from(fileInput.files)
+        .filter(file => file.type.startsWith("image/"))
+        .sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name))
+        .map(file => ({
+          file,
+          relativePath: file.webkitRelativePath || file.name,
+          url: URL.createObjectURL(file),
+        }));
+      currentIndex = 0;
+      currentPoints = [];
+      renderImage();
+    });
+
+    pathPrefix.addEventListener("input", renderAll);
+    prevBtn.onclick = () => go(-1);
+    nextBtn.onclick = () => go(1);
+    aCloserBtn.onclick = () => addPair("A");
+    bCloserBtn.onclick = () => addPair("B");
+    clearBtn.onclick = clearCurrentPoints;
+    undoBtn.onclick = undoLast;
+
+    function csvEscape(value) {
+      const text = String(value ?? "");
+      if (/[",\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+      return text;
+    }
+
+    downloadBtn.onclick = () => {
+      const fields = ["image", "pair_id", "ax", "ay", "bx", "by", "closer", "notes"];
+      const lines = [fields.join(",")];
+      for (const pair of pairs) {
+        lines.push(fields.map(field => csvEscape(pair[field])).join(","));
+      }
+      const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "depth_pairs.csv";
+      link.click();
+      URL.revokeObjectURL(url);
+    };
+
+    document.addEventListener("keydown", event => {
+      if (event.target instanceof HTMLInputElement) return;
+      const key = event.key.toLowerCase();
+      if (key === "a") addPair("A");
+      if (key === "b") addPair("B");
+      if (key === "n") go(1);
+      if (key === "p") go(-1);
+      if (key === "u") undoLast();
+      if (event.key === "Escape") clearCurrentPoints();
+    });
+
+    renderAll();
+  </script>
+</body>
+</html>
+

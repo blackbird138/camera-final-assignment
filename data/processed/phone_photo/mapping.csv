@@ -1,0 +1,14 @@
+input,output,status,width,height,input_ext
+data/raw/phone_photo/IMG_0124.HEIC,data/processed/phone_photo_jpg/IMG_0124.jpg,converted,3024,4032,.heic
+data/raw/phone_photo/IMG_0138.HEIC,data/processed/phone_photo_jpg/IMG_0138.jpg,converted,4032,3024,.heic
+data/raw/phone_photo/IMG_0591.HEIC,data/processed/phone_photo_jpg/IMG_0591.jpg,converted,3024,4032,.heic
+data/raw/phone_photo/IMG_0734.HEIC,data/processed/phone_photo_jpg/IMG_0734.jpg,converted,3024,4032,.heic
+data/raw/phone_photo/IMG_0810.HEIC,data/processed/phone_photo_jpg/IMG_0810.jpg,converted,3024,4032,.heic
+data/raw/phone_photo/IMG_0838.HEIC,data/processed/phone_photo_jpg/IMG_0838.jpg,converted,3024,4032,.heic
+data/raw/phone_photo/IMG_1471.HEIC,data/processed/phone_photo_jpg/IMG_1471.jpg,converted,4032,3024,.heic
+data/raw/phone_photo/IMG_1555.HEIC,data/processed/phone_photo_jpg/IMG_1555.jpg,converted,5712,4284,.heic
+data/raw/phone_photo/IMG_2358.JPG,data/processed/phone_photo_jpg/IMG_2358.jpg,converted,4032,3024,.jpg
+data/raw/phone_photo/IMG_2366.JPG,data/processed/phone_photo_jpg/IMG_2366.jpg,converted,4032,3024,.jpg
+data/raw/phone_photo/IMG_2367.JPG,data/processed/phone_photo_jpg/IMG_2367.jpg,converted,3024,4032,.jpg
+data/raw/phone_photo/IMG_2369.HEIC,data/processed/phone_photo_jpg/IMG_2369.jpg,converted,4284,5712,.heic
+data/raw/phone_photo/IMG_2370.JPG,data/processed/phone_photo_jpg/IMG_2370.jpg,converted,3024,4032,.jpg

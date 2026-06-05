@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--img-path", required=True, type=Path, help="Image file or directory.")
     parser.add_argument("--outdir", required=True, type=Path, help="Directory for depth outputs and runtime CSV.")
-    parser.add_argument("--process-res", default=504, type=int, help="DA3 processing resolution.")
+    parser.add_argument("--process-res", default=2048, type=int, help="DA3 processing resolution.")
     parser.add_argument(
         "--process-res-method",
         default="upper_bound_resize",
