@@ -139,71 +139,73 @@ def main() -> int:
         raise RuntimeError(f"No images found under: {img_path}")
     outdir.mkdir(parents=True, exist_ok=True)
 
-    model = DepthAnything3.from_pretrained(args.model_dir).to(device)
+    model = DepthAnything3.from_pretrained(args.model_dir).to(device).eval()
 
-    for _ in range(max(args.warmup, 0)):
-        _ = model.inference(
-            image=[str(images[0])],
-            process_res=args.process_res,
-            process_res_method=args.process_res_method,
-        )
-        sync_if_needed(torch, device)
+    with torch.inference_mode():
+        for _ in range(max(args.warmup, 0)):
+            _ = model.inference(
+                image=[str(images[0])],
+                process_res=args.process_res,
+                process_res_method=args.process_res_method,
+            )
+            sync_if_needed(torch, device)
 
     rows = []
     start_all = time.perf_counter()
 
-    for index, image in enumerate(images, start=1):
-        sync_if_needed(torch, device)
-        start = time.perf_counter()
-        prediction = model.inference(
-            image=[str(image)],
-            process_res=args.process_res,
-            process_res_method=args.process_res_method,
-        )
-        sync_if_needed(torch, device)
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
+    with torch.inference_mode():
+        for index, image in enumerate(images, start=1):
+            sync_if_needed(torch, device)
+            start = time.perf_counter()
+            prediction = model.inference(
+                image=[str(image)],
+                process_res=args.process_res,
+                process_res_method=args.process_res_method,
+            )
+            sync_if_needed(torch, device)
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
 
-        depth = prediction.depth[0]
-        if hasattr(depth, "detach"):
-            depth = depth.detach().cpu().numpy()
-        depth_uint8, depth_min, depth_max = normalize_depth_for_vis(
-            depth,
-            np,
-            args.vis_larger_is,
-            args.invert_vis,
-        )
-        depth_vis = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_INFERNO)
+            depth = prediction.depth[0]
+            if hasattr(depth, "detach"):
+                depth = depth.detach().cpu().numpy()
+            depth_uint8, depth_min, depth_max = normalize_depth_for_vis(
+                depth,
+                np,
+                args.vis_larger_is,
+                args.invert_vis,
+            )
+            depth_vis = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_INFERNO)
 
-        output_png = relative_output_path(image, img_path, outdir)
-        output_png.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(output_png), depth_vis)
+            output_png = relative_output_path(image, img_path, outdir)
+            output_png.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(output_png), depth_vis)
 
-        output_npy = ""
-        if args.save_npy:
-            output_npy_path = output_png.with_suffix(".npy")
-            np.save(str(output_npy_path), depth)
-            output_npy = str(output_npy_path)
+            output_npy = ""
+            if args.save_npy:
+                output_npy_path = output_png.with_suffix(".npy")
+                np.save(str(output_npy_path), depth)
+                output_npy = str(output_npy_path)
 
-        height, width = depth.shape[:2]
-        row = {
-            "index": index,
-            "image": str(image),
-            "width": width,
-            "height": height,
-            "model_dir": args.model_dir,
-            "process_res": args.process_res,
-            "process_res_method": args.process_res_method,
-            "device": device,
-            "elapsed_ms": f"{elapsed_ms:.3f}",
-            "depth_min": f"{depth_min:.6f}",
-            "depth_max": f"{depth_max:.6f}",
-            "vis_larger_is": args.vis_larger_is,
-            "invert_vis": str(bool(args.invert_vis)),
-            "output_png": str(output_png),
-            "output_npy": output_npy,
-        }
-        rows.append(row)
-        print(f"[{index}/{len(images)}] {image.name}: {elapsed_ms:.2f} ms")
+            height, width = depth.shape[:2]
+            row = {
+                "index": index,
+                "image": str(image),
+                "width": width,
+                "height": height,
+                "model_dir": args.model_dir,
+                "process_res": args.process_res,
+                "process_res_method": args.process_res_method,
+                "device": device,
+                "elapsed_ms": f"{elapsed_ms:.3f}",
+                "depth_min": f"{depth_min:.6f}",
+                "depth_max": f"{depth_max:.6f}",
+                "vis_larger_is": args.vis_larger_is,
+                "invert_vis": str(bool(args.invert_vis)),
+                "output_png": str(output_png),
+                "output_npy": output_npy,
+            }
+            rows.append(row)
+            print(f"[{index}/{len(images)}] {image.name}: {elapsed_ms:.2f} ms")
 
     total_ms = (time.perf_counter() - start_all) * 1000.0
     csv_path = outdir / "runtime.csv"

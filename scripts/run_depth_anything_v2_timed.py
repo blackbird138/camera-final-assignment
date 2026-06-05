@@ -164,7 +164,7 @@ def main() -> int:
 
     first_img = read_image_bgr(images[0])
 
-    with torch.no_grad():
+    with torch.inference_mode():
         for _ in range(max(args.warmup, 0)):
             _ = model.infer_image(first_img, args.input_size)
             sync_if_needed(torch, device)
@@ -172,7 +172,7 @@ def main() -> int:
     rows = []
     start_all = time.perf_counter()
 
-    with torch.no_grad():
+    with torch.inference_mode():
         for index, image in enumerate(images, start=1):
             raw_img = read_image_bgr(image)
 
