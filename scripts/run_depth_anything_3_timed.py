@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import platform
 import sys
 import time
@@ -110,6 +111,18 @@ def normalize_depth_for_vis(depth, np_module, larger_is: str, invert: bool):
 def sync_if_needed(torch_module, device: str) -> None:
     if device == "cuda":
         torch_module.cuda.synchronize()
+
+
+def percentile(values: list[float], q: float) -> float | None:
+    if not values:
+        return None
+    values = sorted(values)
+    pos = (len(values) - 1) * q
+    lo = math.floor(pos)
+    hi = math.ceil(pos)
+    if lo == hi:
+        return values[lo]
+    return values[lo] * (hi - pos) + values[hi] * (pos - lo)
 
 
 def main() -> int:
@@ -244,6 +257,8 @@ def main() -> int:
         "visualization": "near_bright_far_dark" if not args.invert_vis else "near_dark_far_bright",
         "total_ms": round(total_ms, 3),
         "mean_ms": round(sum(elapsed_values) / len(elapsed_values), 3) if elapsed_values else None,
+        "median_ms": round(percentile(elapsed_values, 0.5), 3) if elapsed_values else None,
+        "p95_ms": round(percentile(elapsed_values, 0.95), 3) if elapsed_values else None,
         "min_ms": round(min(elapsed_values), 3) if elapsed_values else None,
         "max_ms": round(max(elapsed_values), 3) if elapsed_values else None,
         "python": sys.version,

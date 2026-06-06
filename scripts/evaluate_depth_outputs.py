@@ -220,6 +220,17 @@ def score_rows(rows: list[dict], direction: str) -> dict[str, float | int]:
 
 
 def summarize_runtime(model_outdir: Path) -> dict[str, float | int | str]:
+    def percentile(values: list[float], q: float) -> float | str:
+        if not values:
+            return ""
+        values = sorted(values)
+        pos = (len(values) - 1) * q
+        lo = math.floor(pos)
+        hi = math.ceil(pos)
+        if lo == hi:
+            return values[lo]
+        return values[lo] * (hi - pos) + values[hi] * (pos - lo)
+
     summary_json = model_outdir / "summary.json"
     if summary_json.exists():
         with summary_json.open("r", encoding="utf-8") as handle:
@@ -227,6 +238,8 @@ def summarize_runtime(model_outdir: Path) -> dict[str, float | int | str]:
         return {
             "runtime_image_count": data.get("image_count", ""),
             "runtime_mean_ms": data.get("mean_ms", ""),
+            "runtime_median_ms": data.get("median_ms", ""),
+            "runtime_p95_ms": data.get("p95_ms", ""),
             "runtime_min_ms": data.get("min_ms", ""),
             "runtime_max_ms": data.get("max_ms", ""),
         }
@@ -235,6 +248,8 @@ def summarize_runtime(model_outdir: Path) -> dict[str, float | int | str]:
         return {
             "runtime_image_count": "",
             "runtime_mean_ms": "",
+            "runtime_median_ms": "",
+            "runtime_p95_ms": "",
             "runtime_min_ms": "",
             "runtime_max_ms": "",
         }
@@ -242,6 +257,8 @@ def summarize_runtime(model_outdir: Path) -> dict[str, float | int | str]:
     return {
         "runtime_image_count": len(values),
         "runtime_mean_ms": sum(values) / len(values) if values else "",
+        "runtime_median_ms": percentile(values, 0.5),
+        "runtime_p95_ms": percentile(values, 0.95),
         "runtime_min_ms": min(values) if values else "",
         "runtime_max_ms": max(values) if values else "",
     }
@@ -424,6 +441,8 @@ def main() -> int:
         "mean_relative_margin",
         "runtime_image_count",
         "runtime_mean_ms",
+        "runtime_median_ms",
+        "runtime_p95_ms",
         "runtime_min_ms",
         "runtime_max_ms",
     ]
