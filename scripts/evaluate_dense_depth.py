@@ -39,6 +39,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", default=20260606, type=int)
     parser.add_argument("--min-depth", default=1e-6, type=float)
     parser.add_argument("--max-depth", default=math.inf, type=float)
+    parser.add_argument(
+        "--allow-negative-scale",
+        action="store_true",
+        help="Allow negative scale in scale/shift alignment. Keep disabled for final protocol.",
+    )
     return parser.parse_args()
 
 
@@ -242,6 +247,8 @@ def evaluate_one(pred_raw, gt, valid_mask, transform: str, args: argparse.Namesp
             continue
         fit_idx = sample_indices(valid_pred.size, args.fit_sample_pixels, args.seed + row_index)
         scale, shift = fit_scale_shift(valid_pred[fit_idx], valid_gt_fit[fit_idx])
+        if not args.allow_negative_scale and scale <= 0:
+            continue
         aligned = valid_pred * scale + shift
         positive = aligned > args.min_depth
         aligned = aligned[positive]

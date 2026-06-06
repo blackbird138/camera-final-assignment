@@ -37,6 +37,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grayscale", action="store_true", help="Save grayscale depth instead of inferno colormap.")
     parser.add_argument("--pred-only", action="store_true", help="Save only prediction instead of original + prediction comparison.")
     parser.add_argument("--save-npy", action="store_true", help="Also save raw depth arrays as .npy files.")
+    parser.add_argument(
+        "--npy-dtype",
+        default="float32",
+        choices=("float32", "float16"),
+        help="Dtype for saved .npy depth arrays. Use float16 for large benchmarks to save space.",
+    )
+    parser.add_argument("--skip-png", action="store_true", help="Skip PNG visualization output for large benchmarks.")
     parser.add_argument("--recursive", action="store_true", help="Search image directories recursively.")
     parser.add_argument(
         "--vis-larger-is",
@@ -187,7 +194,9 @@ def main() -> int:
 
     with torch.inference_mode():
         for index, image in enumerate(images, start=1):
+            load_start = time.perf_counter()
             raw_img = read_image_bgr(image)
+            load_ms = (time.perf_counter() - load_start) * 1000.0
 
             sync_if_needed(torch, device)
             start = time.perf_counter()
@@ -195,38 +204,44 @@ def main() -> int:
             sync_if_needed(torch, device)
             elapsed_ms = (time.perf_counter() - start) * 1000.0
 
-            depth_uint8, depth_min, depth_max = normalize_depth_for_vis(
-                depth,
-                np,
-                args.vis_larger_is,
-                args.invert_vis,
-            )
-            if args.grayscale:
-                depth_vis = depth_uint8
-            else:
-                depth_vis = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_INFERNO)
+            depth_min = float(depth.min())
+            depth_max = float(depth.max())
 
             output_png = relative_output_path(image, img_path, outdir)
             output_png.parent.mkdir(parents=True, exist_ok=True)
+            output_png_text = ""
 
-            if args.pred_only:
-                saved = depth_vis
-            else:
-                if depth_vis.ndim == 2:
-                    depth_for_stack = cv2.cvtColor(depth_vis, cv2.COLOR_GRAY2BGR)
+            if not args.skip_png:
+                depth_uint8, depth_min, depth_max = normalize_depth_for_vis(
+                    depth,
+                    np,
+                    args.vis_larger_is,
+                    args.invert_vis,
+                )
+                if args.grayscale:
+                    depth_vis = depth_uint8
                 else:
-                    depth_for_stack = depth_vis
-                if depth_for_stack.shape[:2] != raw_img.shape[:2]:
-                    depth_for_stack = cv2.resize(depth_for_stack, (raw_img.shape[1], raw_img.shape[0]))
-                split = np.ones((raw_img.shape[0], 50, 3), dtype=np.uint8) * 255
-                saved = cv2.hconcat([raw_img, split, depth_for_stack])
+                    depth_vis = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_INFERNO)
 
-            cv2.imwrite(str(output_png), saved)
+                if args.pred_only:
+                    saved = depth_vis
+                else:
+                    if depth_vis.ndim == 2:
+                        depth_for_stack = cv2.cvtColor(depth_vis, cv2.COLOR_GRAY2BGR)
+                    else:
+                        depth_for_stack = depth_vis
+                    if depth_for_stack.shape[:2] != raw_img.shape[:2]:
+                        depth_for_stack = cv2.resize(depth_for_stack, (raw_img.shape[1], raw_img.shape[0]))
+                    split = np.ones((raw_img.shape[0], 50, 3), dtype=np.uint8) * 255
+                    saved = cv2.hconcat([raw_img, split, depth_for_stack])
+
+                cv2.imwrite(str(output_png), saved)
+                output_png_text = str(output_png)
 
             output_npy = ""
             if args.save_npy:
                 output_npy_path = output_png.with_suffix(".npy")
-                np.save(str(output_npy_path), depth)
+                np.save(str(output_npy_path), depth.astype(args.npy_dtype, copy=False))
                 output_npy = str(output_npy_path)
 
             height, width = raw_img.shape[:2]
@@ -239,12 +254,15 @@ def main() -> int:
                 "input_size": args.input_size,
                 "device": device,
                 "checkpoint": str(checkpoint),
+                "load_ms": f"{load_ms:.3f}",
                 "elapsed_ms": f"{elapsed_ms:.3f}",
                 "depth_min": f"{depth_min:.6f}",
                 "depth_max": f"{depth_max:.6f}",
                 "vis_larger_is": args.vis_larger_is,
                 "invert_vis": str(bool(args.invert_vis)),
-                "output_png": str(output_png),
+                "skip_png": str(bool(args.skip_png)),
+                "npy_dtype": args.npy_dtype if args.save_npy else "",
+                "output_png": output_png_text,
                 "output_npy": output_npy,
             }
             rows.append(row)
@@ -261,11 +279,14 @@ def main() -> int:
         "input_size",
         "device",
         "checkpoint",
+        "load_ms",
         "elapsed_ms",
         "depth_min",
         "depth_max",
         "vis_larger_is",
         "invert_vis",
+        "skip_png",
+        "npy_dtype",
         "output_png",
         "output_npy",
     ]
@@ -284,6 +305,8 @@ def main() -> int:
         "warmup": args.warmup,
         "vis_larger_is": args.vis_larger_is,
         "invert_vis": bool(args.invert_vis),
+        "skip_png": bool(args.skip_png),
+        "npy_dtype": args.npy_dtype if args.save_npy else None,
         "visualization": "near_bright_far_dark" if not args.invert_vis else "near_dark_far_bright",
         "total_ms": round(total_ms, 3),
         "mean_ms": round(sum(elapsed_values) / len(elapsed_values), 3) if elapsed_values else None,
