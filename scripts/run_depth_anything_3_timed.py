@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import json
 import math
 import platform
 import sys
 import time
+from collections import deque
 from pathlib import Path
 
 
@@ -44,6 +46,12 @@ def parse_args() -> argparse.Namespace:
         help="Dtype for saved .npy depth arrays. Use float16 for large benchmarks to save space.",
     )
     parser.add_argument("--skip-png", action="store_true", help="Skip PNG visualization output for large benchmarks.")
+    parser.add_argument(
+        "--save-workers",
+        default=1,
+        type=int,
+        help="Background workers for PNG/NPY saving. Use 0 to save synchronously.",
+    )
     parser.add_argument(
         "--vis-larger-is",
         default="farther",
@@ -139,6 +147,36 @@ def read_image_rgb(path: Path):
         return ImageOps.exif_transpose(image).convert("RGB").copy()
 
 
+def save_depth_outputs(
+    *,
+    depth,
+    output_png: Path,
+    skip_png: bool,
+    save_npy: bool,
+    npy_dtype: str,
+    larger_is: str,
+    invert: bool,
+):
+    if skip_png and not save_npy:
+        return
+
+    import cv2
+    import numpy as np
+
+    output_png.parent.mkdir(parents=True, exist_ok=True)
+    if not skip_png:
+        depth_uint8, _, _ = normalize_depth_for_vis(depth, np, larger_is, invert)
+        depth_vis = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_INFERNO)
+        cv2.imwrite(str(output_png), depth_vis)
+
+    if save_npy:
+        np.save(str(output_png.with_suffix(".npy")), depth.astype(npy_dtype, copy=False))
+
+
+def wait_for_save(future: concurrent.futures.Future) -> None:
+    future.result()
+
+
 def main() -> int:
     args = parse_args()
     repo = args.repo.resolve()
@@ -149,7 +187,6 @@ def main() -> int:
         raise FileNotFoundError(f"Depth-Anything-3 repo not found: {repo}")
     sys.path.insert(0, str(repo / "src"))
 
-    import cv2
     import numpy as np
     import torch
     from depth_anything_3.api import DepthAnything3
@@ -180,73 +217,96 @@ def main() -> int:
             sync_if_needed(torch, device)
 
     rows = []
+    save_workers = max(args.save_workers, 0)
+    save_executor = None
+    pending_saves: deque[concurrent.futures.Future] = deque()
     start_all = time.perf_counter()
 
-    with torch.inference_mode():
-        for index, image in enumerate(images, start=1):
-            load_start = time.perf_counter()
-            input_image = read_image_rgb(image)
-            load_ms = (time.perf_counter() - load_start) * 1000.0
+    try:
+        if save_workers > 0 and (not args.skip_png or args.save_npy):
+            save_executor = concurrent.futures.ThreadPoolExecutor(max_workers=save_workers)
 
-            sync_if_needed(torch, device)
-            start = time.perf_counter()
-            prediction = model.inference(
-                image=[input_image],
-                process_res=args.process_res,
-                process_res_method=args.process_res_method,
-            )
-            sync_if_needed(torch, device)
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
+        with torch.inference_mode():
+            for index, image in enumerate(images, start=1):
+                load_start = time.perf_counter()
+                input_image = read_image_rgb(image)
+                load_ms = (time.perf_counter() - load_start) * 1000.0
 
-            depth = prediction.depth[0]
-            if hasattr(depth, "detach"):
-                depth = depth.detach().cpu().numpy()
-            depth_min = float(depth.min())
-            depth_max = float(depth.max())
-
-            output_png = relative_output_path(image, img_path, outdir)
-            output_png.parent.mkdir(parents=True, exist_ok=True)
-            output_png_text = ""
-            if not args.skip_png:
-                depth_uint8, depth_min, depth_max = normalize_depth_for_vis(
-                    depth,
-                    np,
-                    args.vis_larger_is,
-                    args.invert_vis,
+                sync_if_needed(torch, device)
+                start = time.perf_counter()
+                prediction = model.inference(
+                    image=[input_image],
+                    process_res=args.process_res,
+                    process_res_method=args.process_res_method,
                 )
-                depth_vis = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_INFERNO)
-                cv2.imwrite(str(output_png), depth_vis)
-                output_png_text = str(output_png)
+                sync_if_needed(torch, device)
+                elapsed_ms = (time.perf_counter() - start) * 1000.0
 
-            output_npy = ""
-            if args.save_npy:
-                output_npy_path = output_png.with_suffix(".npy")
-                np.save(str(output_npy_path), depth.astype(args.npy_dtype, copy=False))
-                output_npy = str(output_npy_path)
+                depth = prediction.depth[0]
+                if hasattr(depth, "detach"):
+                    depth = depth.detach().cpu().numpy()
+                depth_min = float(depth.min())
+                depth_max = float(depth.max())
 
-            height, width = depth.shape[:2]
-            row = {
-                "index": index,
-                "image": str(image),
-                "width": width,
-                "height": height,
-                "model_dir": args.model_dir,
-                "process_res": args.process_res,
-                "process_res_method": args.process_res_method,
-                "device": device,
-                "load_ms": f"{load_ms:.3f}",
-                "elapsed_ms": f"{elapsed_ms:.3f}",
-                "depth_min": f"{depth_min:.6f}",
-                "depth_max": f"{depth_max:.6f}",
-                "vis_larger_is": args.vis_larger_is,
-                "invert_vis": str(bool(args.invert_vis)),
-                "skip_png": str(bool(args.skip_png)),
-                "npy_dtype": args.npy_dtype if args.save_npy else "",
-                "output_png": output_png_text,
-                "output_npy": output_npy,
-            }
-            rows.append(row)
-            print(f"[{index}/{len(images)}] {image.name}: {elapsed_ms:.2f} ms")
+                output_png = relative_output_path(image, img_path, outdir)
+                output_png_text = str(output_png) if not args.skip_png else ""
+                output_npy = str(output_png.with_suffix(".npy")) if args.save_npy else ""
+
+                if save_executor is not None:
+                    pending_saves.append(
+                        save_executor.submit(
+                            save_depth_outputs,
+                            depth=depth,
+                            output_png=output_png,
+                            skip_png=args.skip_png,
+                            save_npy=args.save_npy,
+                            npy_dtype=args.npy_dtype,
+                            larger_is=args.vis_larger_is,
+                            invert=args.invert_vis,
+                        )
+                    )
+                    while len(pending_saves) > save_workers * 2:
+                        wait_for_save(pending_saves.popleft())
+                else:
+                    save_depth_outputs(
+                        depth=depth,
+                        output_png=output_png,
+                        skip_png=args.skip_png,
+                        save_npy=args.save_npy,
+                        npy_dtype=args.npy_dtype,
+                        larger_is=args.vis_larger_is,
+                        invert=args.invert_vis,
+                    )
+
+                height, width = depth.shape[:2]
+                row = {
+                    "index": index,
+                    "image": str(image),
+                    "width": width,
+                    "height": height,
+                    "model_dir": args.model_dir,
+                    "process_res": args.process_res,
+                    "process_res_method": args.process_res_method,
+                    "device": device,
+                    "load_ms": f"{load_ms:.3f}",
+                    "elapsed_ms": f"{elapsed_ms:.3f}",
+                    "depth_min": f"{depth_min:.6f}",
+                    "depth_max": f"{depth_max:.6f}",
+                    "vis_larger_is": args.vis_larger_is,
+                    "invert_vis": str(bool(args.invert_vis)),
+                    "skip_png": str(bool(args.skip_png)),
+                    "npy_dtype": args.npy_dtype if args.save_npy else "",
+                    "output_png": output_png_text,
+                    "output_npy": output_npy,
+                }
+                rows.append(row)
+                print(f"[{index}/{len(images)}] {image.name}: {elapsed_ms:.2f} ms")
+
+        while pending_saves:
+            wait_for_save(pending_saves.popleft())
+    finally:
+        if save_executor is not None:
+            save_executor.shutdown(wait=True)
 
     total_ms = (time.perf_counter() - start_all) * 1000.0
     csv_path = outdir / "runtime.csv"
