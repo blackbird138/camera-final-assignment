@@ -74,7 +74,7 @@ def main() -> int:
         if not image.is_file() or image.suffix not in IMAGE_EXTENSIONS:
             continue
         rel_parts = image.resolve().relative_to(root).parts
-        if "dslr_images" not in rel_parts:
+        if "dslr_images" not in rel_parts and "images" not in rel_parts:
             continue
         scene = rel_parts[0] if rel_parts else ""
         if scene_filter and scene not in scene_filter:

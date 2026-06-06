@@ -76,7 +76,20 @@ extract_archive() {
 
 scene_done() {
   local scene="$1"
-  [[ -d "$scene/dslr_images" && -d "$scene/dslr_depth" ]]
+  [[ ( -d "$scene/dslr_images" || -d "$scene/images" ) && ( -d "$scene/dslr_depth" || -d "$scene/ground_truth_depth" ) ]]
+}
+
+scene_layout() {
+  local scene="$1"
+  local image_dir="missing"
+  local depth_dir="missing"
+
+  [[ -d "$scene/dslr_images" ]] && image_dir="dslr_images"
+  [[ -d "$scene/images" ]] && image_dir="images"
+  [[ -d "$scene/dslr_depth" ]] && depth_dir="dslr_depth"
+  [[ -d "$scene/ground_truth_depth" ]] && depth_dir="ground_truth_depth"
+
+  printf '%s/%s and %s/%s' "$scene" "$image_dir" "$scene" "$depth_dir"
 }
 
 parse_args() {
@@ -112,21 +125,21 @@ parse_args() {
 main() {
   parse_args "$@"
 
-  have_cmd 7z || die "7z not found. Install it first: apt-get update && apt-get install -y p7zip-full"
-
   mkdir -p "$ROOT"
   cd "$ROOT"
 
   log "ETH3D root: $(pwd)"
   log "Scenes: ${SCENES[*]}"
-  log "This downloads distorted DSLR JPGs plus rendered depth maps. Depth maps match dslr_images, not undistorted images."
+  log "This downloads distorted DSLR JPGs plus rendered depth maps. Depth maps match the distorted images, not undistorted images."
 
   for scene in "${SCENES[@]}"; do
     [[ -n "$scene" ]] || continue
     if [[ "$FORCE" -eq 0 ]] && scene_done "$scene"; then
-      log "Skip $scene: dslr_images and dslr_depth already exist."
+      log "Skip $scene: $(scene_layout "$scene") already exist."
       continue
     fi
+
+    have_cmd 7z || die "7z not found. Install it first: apt-get update && apt-get install -y p7zip-full"
 
     for kind in dslr_jpg dslr_depth; do
       archive="${scene}_${kind}.7z"
@@ -143,8 +156,8 @@ main() {
       fi
     done
 
-    scene_done "$scene" || die "Scene $scene did not produce expected $scene/dslr_images and $scene/dslr_depth folders."
-    log "Done $scene"
+    scene_done "$scene" || die "Scene $scene did not produce expected image/depth folders. Expected either $scene/dslr_images or $scene/images, and either $scene/dslr_depth or $scene/ground_truth_depth."
+    log "Done $scene: $(scene_layout "$scene")"
   done
 
   log "All requested ETH3D scenes are ready."
