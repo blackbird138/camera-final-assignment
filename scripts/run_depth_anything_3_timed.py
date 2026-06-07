@@ -56,12 +56,12 @@ def parse_args() -> argparse.Namespace:
         "--vis-larger-is",
         default="farther",
         choices=("closer", "farther"),
-        help="Meaning of larger raw depth values for PNG visualization. DA3 defaults to farther.",
+        help="Legacy option kept for compatibility; DA3 PNGs use official visualize_depth().",
     )
     parser.add_argument(
         "--invert-vis",
         action="store_true",
-        help="Invert final PNG visualization after applying --vis-larger-is.",
+        help="Legacy option kept for compatibility; DA3 PNGs use official visualize_depth().",
     )
     return parser.parse_args()
 
@@ -160,14 +160,14 @@ def save_depth_outputs(
     if skip_png and not save_npy:
         return
 
-    import cv2
     import numpy as np
+    from PIL import Image
+    from depth_anything_3.utils.visualize import visualize_depth
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     if not skip_png:
-        depth_uint8, _, _ = normalize_depth_for_vis(depth, np, larger_is, invert)
-        depth_vis = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_INFERNO)
-        cv2.imwrite(str(output_png), depth_vis)
+        depth_vis = visualize_depth(depth)
+        Image.fromarray(depth_vis).save(output_png)
 
     if save_npy:
         np.save(str(output_png.with_suffix(".npy")), depth.astype(npy_dtype, copy=False))
@@ -347,7 +347,7 @@ def main() -> int:
         "invert_vis": bool(args.invert_vis),
         "skip_png": bool(args.skip_png),
         "npy_dtype": args.npy_dtype if args.save_npy else None,
-        "visualization": "near_bright_far_dark" if not args.invert_vis else "near_dark_far_bright",
+        "visualization": "da3_official_visualize_depth_spectral",
         "total_ms": round(total_ms, 3),
         "mean_ms": round(sum(elapsed_values) / len(elapsed_values), 3) if elapsed_values else None,
         "median_ms": round(percentile(elapsed_values, 0.5), 3) if elapsed_values else None,

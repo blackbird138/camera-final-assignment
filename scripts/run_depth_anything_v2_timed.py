@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=Path, help="Checkpoint path. Defaults to repo/checkpoints/depth_anything_v2_{encoder}.pth.")
     parser.add_argument("--input-size", default=518, type=int, help="Depth Anything V2 input size.")
     parser.add_argument("--warmup", default=1, type=int, help="Warmup runs on the first image before timing.")
-    parser.add_argument("--grayscale", action="store_true", help="Save grayscale depth instead of inferno colormap.")
+    parser.add_argument("--grayscale", action="store_true", help="Save grayscale depth instead of Spectral_r colormap.")
     parser.add_argument("--pred-only", action="store_true", help="Save only prediction instead of original + prediction comparison.")
     parser.add_argument("--save-npy", action="store_true", help="Also save raw depth arrays as .npy files.")
     parser.add_argument(
@@ -121,6 +121,13 @@ def normalize_depth_for_vis(depth, np_module, larger_is: str, invert: bool):
         normalized = 1.0 - normalized
     depth_uint8 = (normalized * 255.0).astype(np_module.uint8)
     return depth_uint8, depth_min, depth_max
+
+
+def apply_spectral_colormap(depth_uint8):
+    import matplotlib
+
+    depth_vis = matplotlib.colormaps["Spectral_r"](depth_uint8)[..., :3]
+    return (depth_vis * 255.0).astype("uint8")[..., ::-1]
 
 
 def relative_output_path(image: Path, root: Path, outdir: Path) -> Path:
@@ -221,7 +228,7 @@ def main() -> int:
                 if args.grayscale:
                     depth_vis = depth_uint8
                 else:
-                    depth_vis = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_INFERNO)
+                    depth_vis = apply_spectral_colormap(depth_uint8)
 
                 if args.pred_only:
                     saved = depth_vis
@@ -307,7 +314,7 @@ def main() -> int:
         "invert_vis": bool(args.invert_vis),
         "skip_png": bool(args.skip_png),
         "npy_dtype": args.npy_dtype if args.save_npy else None,
-        "visualization": "near_bright_far_dark" if not args.invert_vis else "near_dark_far_bright",
+        "visualization": "grayscale" if args.grayscale else "da2_official_spectral_r",
         "total_ms": round(total_ms, 3),
         "mean_ms": round(sum(elapsed_values) / len(elapsed_values), 3) if elapsed_values else None,
         "median_ms": round(percentile(elapsed_values, 0.5), 3) if elapsed_values else None,
